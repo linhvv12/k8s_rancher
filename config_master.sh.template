@@ -1,0 +1,46 @@
+#!/bin/sh
+apt install jq -y
+admin_password="__ADMIN_PASSWORD__"
+cluster_name="__CLUSTER_NAME__"
+k8s_version="__K8S_VERSION__"
+
+while true; do
+  curl -sLk https://127.0.0.1/ping && break
+  echo "Server starting, sleep 5"
+  sleep 5
+done
+
+
+while true; do
+
+    LOGINRESPONSE=$(curl "https://127.0.0.1/v3-public/localProviders/local?action=login" -H 'content-type: application/json' --data-binary '{"username":"admin","password":"admin"}' --insecure)
+    LOGINTOKEN=$(echo $LOGINRESPONSE | jq -r .token)
+
+    if [ "$LOGINTOKEN" != "null" ]; then
+        break
+    else
+        sleep 5
+    fi
+done
+
+curl -s 'https://127.0.0.1/v3/users?action=changepassword' -H 'content-type: application/json' -H "Authorization: Bearer $LOGINTOKEN" --data-binary '{"currentPassword":"admin","newPassword":"'$admin_password'"}' --insecure
+
+echo "Create API key"
+APIRESPONSE=$(curl -s 'https://127.0.0.1/v3/token' -H 'content-type: application/json' -H "Authorization: Bearer $LOGINTOKEN" --data-binary '{"type":"token","description":"automation"}' --insecure)
+
+echo "Extract and store token"
+APITOKEN=`echo $APIRESPONSE | jq -r .token`
+
+echo "Configure server-url"
+RANCHER_SERVER="https://__RANCHER_SERVER__"
+curl -s 'https://127.0.0.1/v3/settings/server-url' -H 'content-type: application/json' -H "Authorization: Bearer $APITOKEN" -X PUT --data-binary '{"name":"server-url","value":"'$RANCHER_SERVER'"}' --insecure
+
+echo "Create cluster"
+CLUSTERRESPONSE=$(curl -s 'https://127.0.0.1/v3/cluster?_replace=true' -H 'content-type: application/json' -H "Authorization: Bearer $APITOKEN" --data-binary '{"dockerRootDir":"/var/lib/docker","enableClusterAlerting":false,"enableClusterMonitoring":false,"enableNetworkPolicy":false,"windowsPreferedCluster":false,"type":"cluster","name":"'$cluster_name'","rancherKubernetesEngineConfig":{"addonJobTimeout":45,"ignoreDockerVersion":true,"rotateEncryptionKey":false,"sshAgentAuth":false,"type":"rancherKubernetesEngineConfig","kubernetesVersion":"'$k8s_version'","authentication":{"strategy":"x509","type":"authnConfig"},"dns":{"type":"dnsConfig","nodelocal":{"type":"nodelocal","ip_address":"","node_selector":null,"update_strategy":{}}},"network":{"mtu":0,"plugin":"calico","type":"networkConfig","options":{"flannel_backend_type":"vxlan"}},"ingress":{"defaultBackend":false,"httpPort":0,"httpsPort":0,"provider":"nginx","type":"ingressConfig"},"monitoring":{"provider":"metrics-server","replicas":1,"type":"monitoringConfig"},"services":{"type":"rkeConfigServices","kubeApi":{"alwaysPullImages":false,"podSecurityPolicy":false,"serviceNodePortRange":"30000-32767","type":"kubeAPIService","secretsEncryptionConfig":{"enabled":false,"type":"secretsEncryptionConfig"}},"etcd":{"creation":"12h","extraArgs":{"heartbeat-interval":500,"election-timeout":5000},"gid":0,"retention":"72h","snapshot":false,"uid":0,"type":"etcdService","backupConfig":{"enabled":true,"intervalHours":12,"retention":6,"safeTimestamp":false,"timeout":300,"type":"backupConfig"}}},"upgradeStrategy":{"maxUnavailableControlplane":"1","maxUnavailableWorker":"10%","drain":"false","nodeDrainInput":{"deleteLocalData":false,"force":false,"gracePeriod":-1,"ignoreDaemonSets":true,"timeout":120,"type":"nodeDrainInput"},"maxUnavailableUnit":"percentage"}},"localClusterAuthEndpoint":{"enabled":true,"type":"localClusterAuthEndpoint"},"labels":{},"scheduledClusterScan":{"enabled":false,"scheduleConfig":null,"scanConfig":null}}' --insecure)
+
+echo "Extract clusterid to use for generating the docker run command"
+CLUSTERID=`echo $CLUSTERRESPONSE | jq -r .id`
+
+echo "Generate registrationtoken"
+curl -s 'https://127.0.0.1/v3/clusterregistrationtoken' -H 'content-type: application/json' -H "Authorization: Bearer $APITOKEN" --data-binary '{"type":"clusterRegistrationToken","clusterId":"'$CLUSTERID'"}' --insecure
+
